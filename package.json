@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "LawAssist AI - Legal Companion Chat Application",
   "main": "index.html",
+  "packageManager": "npm@10.2.4",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
