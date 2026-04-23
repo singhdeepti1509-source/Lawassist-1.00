@@ -1,3 +1,18 @@
+# Ignore local environment folders
 node_modules/
 dist/
+build/
 .env
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+*.exe
+*.dll
+
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
