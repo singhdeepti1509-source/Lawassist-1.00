@@ -5,9 +5,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
 # 1. Configuration - Replace with your actual paths
-BASE_MODEL = "meta-llama/Llama-3.2-3B"
-ADAPTER_ID = "singhdeepti1509-source/your-fine-tuned-adapter" # Replace with your HF adapter ID
-
+BASE_MODEL = "meta-llama/Llama-3.2-1B-Instruct"
+ADAPTER_ID = "Deepti-singh-196/Lawassit-v1"
 # Load Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
 tokenizer.pad_token = tokenizer.eos_token
