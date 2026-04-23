@@ -6,7 +6,8 @@ from peft import PeftModel
 
 # 1. Configuration - Replace with your actual paths
 BASE_MODEL = "meta-llama/Llama-3.2-1B-Instruct"
-ADAPTER_ID = "Deepti-singh-196/Lawassit-v1"
+ADAPTER_ID = "Deepti-singh-196/Lawassit-v1"  # Your fine-tuned adapter
+
 # Load Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
 tokenizer.pad_token = tokenizer.eos_token
@@ -64,7 +65,7 @@ demo = gr.ChatInterface(
     fn=chat_with_lawassist,
     type="messages", # Required for Gradio 6.x
     title="⚖️ LawAssist Version 1.0 (RAG)",
-    description="Indian Judicial AI assistant fine-tuned on Llama-3.2. Provides citation-aware summaries.",
+    description="Indian Judicial AI assistant fine-tuned on Llama-3.2-1B-Instruct. Provides citation-aware summaries.",
     examples=["What are the grounds for divorce under the Hindu Marriage Act?", "Summarize recent RAG trends in legal NLP."],
     theme="soft"
 )
