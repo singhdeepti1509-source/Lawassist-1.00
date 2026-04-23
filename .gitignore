@@ -1,18 +1,44 @@
-# Ignore local environment folders
+# Dependencies
 node_modules/
-dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Production builds
 build/
-.env
+dist/
+.next/
+out/
 
-# Ignore OS-specific files
-.DS_Store
-Thumbs.db
-*.exe
-*.dll
-
-# Ignore Python cache
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
+*.so
+.Python
+env/
 venv/
+ENV/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Misc
+.cache/
+.parcel-cache/
