@@ -18,4 +18,4 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force https://singhdeepti1509-source:$HF_TOKEN@huggingface.co/spaces/singhdeepti1509-source/LawAssist-Version1-RAG main
+          git push --force https://Deepti-singh-196:$HF_TOKEN@huggingface.co/spaces/Deepti-singh-196/LawAssit_Version1_RAG main
