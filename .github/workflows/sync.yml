@@ -18,6 +18,4 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # REPLACE 'singhdeepti1509-source' with your HF username if different
-          # REPLACE 'Lawassist-Version1-RAG' with your exact Space name
-          git push --force https://singhdeepti1509-source:$HF_TOKEN@huggingface.co/spaces/singhdeepti1509-source/Lawassist-Version1-RAG main
+          git push --force https://singhdeepti1509-source:$HF_TOKEN@huggingface.co/spaces/singhdeepti1509-source/LawAssist-Version1-RAG main
