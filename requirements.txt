@@ -6,3 +6,4 @@ torch
 accelerate
 sentence-transformers
 pinecone-client
+bitsandbytes
