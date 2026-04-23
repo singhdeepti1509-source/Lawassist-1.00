@@ -1,0 +1,8 @@
+gradio==6.13.0
+spaces
+transformers>=4.45.0
+peft
+torch
+accelerate
+sentence-transformers
+pinecone-client
