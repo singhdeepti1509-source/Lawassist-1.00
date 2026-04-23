@@ -1,0 +1,23 @@
+name: Sync to Hugging Face Hub
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # REPLACE 'singhdeepti1509-source' with your HF username if different
+          # REPLACE 'Lawassist-Version1-RAG' with your exact Space name
+          git push --force https://singhdeepti1509-source:$HF_TOKEN@huggingface.co/spaces/singhdeepti1509-source/Lawassist-Version1-RAG main
