@@ -4,6 +4,8 @@ import {
   History, Trash2, User, Mail, Lock, Eye,
   EyeOff, AlertCircle, Loader,
 } from 'lucide-react';
+import { Client } from "@gradio/client";
+
 // Import your Firebase functions
 import {
   auth,
@@ -15,8 +17,17 @@ import {
   saveChatLog,
   getChatHistory,
 } from './firebase';
-// Import Gradio client — THIS IS THE KEY FIX
-import { Client } from '@gradio/client';
+
+// ✅ UPDATED: Uses your actual Gradio Space and correct endpoint
+const getAIResponse = async (userInput) => {
+  const client = await Client.connect("Deepti-singh-196/LawAssit_Version1_RAG");
+
+  const result = await client.predict("/respond", {
+    message: userInput,
+  });
+
+  return result.data[0];
+};
 
 export default function LawAssistChat() {
   const [messages, setMessages] = useState([
@@ -60,8 +71,6 @@ export default function LawAssistChat() {
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
       if (firebaseUser) {
-        console.log('User signed in:', firebaseUser.uid);
-        // User is signed in
         const userDataResult = await getUserData(firebaseUser.uid);
         const userData = {
           uid: firebaseUser.uid,
@@ -72,8 +81,6 @@ export default function LawAssistChat() {
         setShowAuth(false);
         await loadChatHistory(firebaseUser.uid);
       } else {
-        // User is signed out
-        console.log('User signed out');
         setUser(null);
         setShowAuth(true);
       }
@@ -85,7 +92,6 @@ export default function LawAssistChat() {
   useEffect(() => {
     if (user && !sessionId) {
       const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      console.log('Created new session:', newSessionId);
       setSessionId(newSessionId);
     }
   }, [user, sessionId]);
@@ -109,9 +115,7 @@ export default function LawAssistChat() {
 
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      console.log('Login successful');
     } catch (error) {
-      console.error('Login error:', error);
       if (error.code === 'auth/user-not-found') {
         setAuthError('No account found with this email. Please sign up.');
       } else if (error.code === 'auth/wrong-password') {
@@ -155,15 +159,11 @@ export default function LawAssistChat() {
 
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      console.log('User created:', userCredential.user.uid);
-      
       await saveUserData(userCredential.user.uid, {
         name: name,
         email: email,
       });
-      console.log('User data saved to Firestore');
     } catch (error) {
-      console.error('Signup error:', error);
       if (error.code === 'auth/email-already-in-use') {
         setAuthError('An account with this email already exists. Please login.');
       } else if (error.code === 'auth/weak-password') {
@@ -179,47 +179,24 @@ export default function LawAssistChat() {
   };
 
   const saveMessage = async (message) => {
-    if (!user || !sessionId) {
-      console.warn('Cannot save message: user or sessionId is missing', { 
-        hasUser: !!user, 
-        sessionId 
-      });
-      return;
-    }
-    
+    if (!user || !sessionId) return;
+
     setSaveStatus('Saving...');
-    console.log('Attempting to save message:', { 
-      userId: user.uid, 
-      sessionId, 
-      userName: user.name, 
-      role: message.role,
-      contentLength: message.content.length
-    });
-    
+
     try {
       const result = await saveChatLog(user.uid, sessionId, user.name, message);
-      if (result.success) {
-        setSaveStatus('Saved ✓');
-        console.log('Message saved successfully with ID:', result.id);
-      } else {
-        setSaveStatus('Save failed');
-        console.error('Save failed with error:', result.error);
-      }
+      setSaveStatus(result.success ? 'Saved ✓' : 'Save failed');
     } catch (error) {
       setSaveStatus('Save failed');
-      console.error('Save exception:', error);
     }
     setTimeout(() => setSaveStatus(''), 2000);
   };
 
   const loadChatHistory = async (userId) => {
-    console.log('Loading chat history for user:', userId);
     try {
       const result = await getChatHistory(userId);
-      console.log('Chat history result:', result);
-      
+
       if (result.success) {
-        console.log(`Found ${result.logs.length} chat logs`);
         const sessions = {};
         result.logs.forEach(log => {
           if (!sessions[log.sessionId]) sessions[log.sessionId] = [];
@@ -228,119 +205,100 @@ export default function LawAssistChat() {
         const recentSessions = Object.entries(sessions)
           .sort((a, b) => new Date(b[1][0].timestamp) - new Date(a[1][0].timestamp))
           .slice(0, 5);
-        console.log(`Grouped into ${recentSessions.length} sessions`);
         setChatHistory(recentSessions);
-      } else {
-        console.error('Failed to load chat history:', result.error);
-        setChatHistory([]);
       }
     } catch (error) {
       console.error('Exception loading chat history:', error);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() || isTyping) return;
+
+    const userMessage = {
+      role: "user",
+      content: input,
+      timestamp: new Date().toISOString(),
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    await saveMessage(userMessage);
+
+    const userQuestion = input.trim();
+    setInput("");
+    setIsTyping(true);
+    setModelStatus("Connecting to Hugging Face...");
+
+    try {
+      setModelStatus("Thinking...");
+
+      const aiResponse = await getAIResponse(userQuestion);
+
+      const aiMessage = {
+        role: "assistant",
+        content: typeof aiResponse === "string" ? aiResponse.trim() : JSON.stringify(aiResponse),
+        timestamp: new Date().toISOString(),
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+      await saveMessage(aiMessage);
+      setModelStatus("ready");
+
+    } catch (error) {
+      console.error("Gradio API error:", error);
+      setModelStatus("offline");
+
+      const errorMsg = {
+        role: "assistant",
+        content: `⚠️ Unable to connect to the AI model.\n\nError: ${error.message}\n\nPlease check:\n1. Your Hugging Face Space "Deepti-singh-196/LawAssit_Version1_RAG" is running\n2. The Space is set to public\n3. The /respond endpoint is active`,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, errorMsg]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const startNewChat = () => {
+    setMessages([{
+      role: 'assistant',
+      content: "Hello! I'm LawAssist, your AI-powered legal companion. How can I help you with your legal questions today?",
+      timestamp: new Date().toISOString(),
+    }]);
+    const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setSessionId(newSessionId);
+  };
+
+  const clearHistory = () => {
+    if (window.confirm('Clear visible history?')) {
       setChatHistory([]);
     }
   };
 
-
-
-// Replace your entire handleSend function with this:
-// ─────────────────────────────────────────────────────────────
-// FINAL WORKING handleSend – NO MORE "still thinking"
-// ─────────────────────────────────────────────────────────────
-const handleSend = async () => {
-  if (!input.trim() || isTyping) return;
-
-  const userMessage = {
-    role: "user",
-    content: input,
-    timestamp: new Date().toISOString(),
+  const handleLogout = async () => {
+    await signOut(auth);
+    setMessages([{
+      role: 'assistant',
+      content: "Hello! I'm LawAssist, your AI-powered legal companion. How can I help you with your legal questions today?",
+      timestamp: new Date().toISOString(),
+    }]);
+    setSessionId(null);
+    setChatHistory([]);
   };
 
-  setMessages(prev => [...prev, userMessage]);
-  await saveMessage(userMessage);
-
-  const userQuestion = input.trim();
-  setInput("");
-  setIsTyping(true);
-  setModelStatus("connecting to model...");
-
-  try {
-    // THIS IS THE ONLY LINE THAT MATTERS — FULL URL
-    const app = await Client.connect("https://deepti-singh-196-lawassist-chatbot-0-1.hf.space", {
-      timeout: 300000 // 5 min max (only for first wake-up)
-    });
-
-    setModelStatus("thinking...");
-
-    const result = await app.predict("/predict", [userQuestion]);
-
-    let aiResponse = result?.data?.[0] ?? "Sorry, no response from model.";
-    if (typeof aiResponse === "string") aiResponse = aiResponse.trim();
-
-    const aiMessage = {
-      role: "assistant",
-      content: aiResponse,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages(prev => [...prev, aiMessage]);
-    await saveMessage(aiMessage);
-    setModelStatus("ready");
-
-  } catch (error) {
-    console.error("Model error:", error);
-    setModelStatus("offline");
-
-    const errorMsg = {
-      role: "assistant",
-      content: "The AI model is waking up (free tier).\nPlease wait 30–90 seconds and try again.",
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => [...prev, errorMsg]);
-  } finally {
-    setIsTyping(false);
-  }
-};
-// Keep the rest of your functions exactly as they are:
-const handleKeyPress = (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
-  }
-};
-
-const startNewChat = () => {
-  setMessages([{
-    role: 'assistant',
-    content: "Hello! I'm LawAssist, your AI-powered legal companion. How can I help you with your legal questions today?",
-    timestamp: new Date().toISOString(),
-  }]);
-  const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  setSessionId(newSessionId);
-};
-
-const clearHistory = () => {
-  if (window.confirm('Clear visible history?')) {
-    setChatHistory([]);
-  }
-};
-
-const handleLogout = async () => {
-  await signOut(auth);
-  setMessages([{
-    role: 'assistant',
-    content: "Hello! I'm LawAssist, your AI-powered legal companion. How can I help you with your legal questions today?",
-    timestamp: new Date().toISOString(),
-  }]);
-  setSessionId(null);
-  setChatHistory([]);
-};
-
-const suggestedPrompts = [
-  'What are the fundamental rights under the Indian Constitution?',
-  'Explain contract law basics in India',
-  'What is intellectual property law?',
-  'How does copyright work in India?',
-];
+  const suggestedPrompts = [
+    'What are the fundamental rights under the Indian Constitution?',
+    'Explain contract law basics in India',
+    'What is intellectual property law?',
+    'How does copyright work in India?',
+  ];
 
   if (showAuth) {
     return (
@@ -473,7 +431,7 @@ const suggestedPrompts = [
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-gradient-to-br from-blue-400 to-cyan-400 p-2 rounded-xl shadow-lg shadow-blue-500/50">
-              <Scale className="w-6 h-6 text-slate-900"  />
+              <Scale className="w-6 h-6 text-slate-900" />
             </div>
             <div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
@@ -502,6 +460,7 @@ const suggestedPrompts = [
           </div>
         </div>
       </header>
+
       {showHistory && (
         <div className="fixed right-4 top-20 w-80 bg-slate-800/95 backdrop-blur-lg border border-blue-500/30 rounded-2xl p-4 shadow-2xl shadow-blue-500/20 max-h-96 overflow-y-auto z-50">
           <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
@@ -522,6 +481,7 @@ const suggestedPrompts = [
           )}
         </div>
       )}
+
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.length === 1 && (
@@ -533,7 +493,7 @@ const suggestedPrompts = [
               <p className="text-slate-400 max-w-2xl mx-auto">
                 Ask me anything about Indian law, legal concepts, contracts, rights, or general legal information.
                 <br />
-                <span className="text-sm text-blue-400">✓ Powered by AI • Saved to Firebase</span>
+                <span className="text-sm text-blue-400">✓ Powered by Hugging Face • Saved to Firebase</span>
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl mx-auto pt-4">
                 {suggestedPrompts.map((prompt, idx) => (
@@ -549,13 +509,14 @@ const suggestedPrompts = [
               </div>
             </div>
           )}
+
           {messages.map((message, index) => (
             <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-3xl rounded-2xl px-6 py-4 ${
-                  message.role === 'user'
-                    ? 'bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-lg shadow-blue-500/30'
-                    : 'bg-slate-800/50 backdrop-blur-sm text-slate-100 border border-slate-700/50'
-                }`}>
+                message.role === 'user'
+                  ? 'bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-lg shadow-blue-500/30'
+                  : 'bg-slate-800/50 backdrop-blur-sm text-slate-100 border border-slate-700/50'
+              }`}>
                 {message.role === 'assistant' && (
                   <div className="flex items-center gap-2 mb-2 text-blue-400 text-sm font-medium">
                     <Scale className="w-4 h-4" />
@@ -567,6 +528,7 @@ const suggestedPrompts = [
               </div>
             </div>
           ))}
+
           {isTyping && (
             <div className="flex justify-start">
               <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl px-6 py-4">
@@ -585,6 +547,7 @@ const suggestedPrompts = [
           <div ref={messagesEndRef} />
         </div>
       </div>
+
       <div className="border-t border-blue-500/20 bg-slate-900/50 backdrop-blur-lg px-4 py-4">
         <div className="max-w-4xl mx-auto">
           <div className="flex gap-3 items-end">
@@ -611,7 +574,11 @@ const suggestedPrompts = [
           </div>
           <div className="flex items-center justify-between mt-3 text-xs text-slate-500">
             <p>
-              Status: <span className={modelStatus === 'ready' ? 'text-green-400' : modelStatus === 'processing' ? 'text-yellow-400' : 'text-red-400'}>{modelStatus}</span>
+              Status: <span className={
+                modelStatus === 'ready' ? 'text-green-400' :
+                modelStatus.includes('Thinking') || modelStatus.includes('Connecting') ? 'text-yellow-400' :
+                'text-red-400'
+              }>{modelStatus}</span>
             </p>
             <p className="text-slate-600">Press Enter to send, Shift+Enter for new line</p>
           </div>

@@ -6,12 +6,14 @@
   "main": "index.html",
   "packageManager": "npm@10.2.4",
   "scripts": {
+    "start": "vite",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@gradio/client": "^2.0.0",
+    "@gradio/client": "^2.2.0",
+    "@huggingface/inference": "^4.13.15",
     "firebase": "^12.6.0",
     "lucide-react": "^0.263.1",
     "react": "^18.2.0",
