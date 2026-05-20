@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import { Client } from "@gradio/client";
 
-// Import your Firebase functions
 import {
   auth,
   createUserWithEmailAndPassword,
@@ -18,15 +17,62 @@ import {
   getChatHistory,
 } from './firebase';
 
-// ✅ UPDATED: Uses your actual Gradio Space and correct endpoint
-const getAIResponse = async (userInput) => {
-  const client = await Client.connect("Deepti-singh-196/LawAssit_Version1_RAG");
+const SPACE_ID = "Deepti-singh-196/LawAssit_Version1_RAG";
+const SPACE_URL = "https://deepti-singh-196-lawassit-version1-rag.hf.space";
 
-  const result = await client.predict("/respond", {
-    message: userInput,
-  });
+// Wake up the Space if sleeping, then call /respond
+const getAIResponse = async (userInput, gradioHistory = [], retries = 3) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Ping to wake Space before first attempt
+      if (attempt === 1) {
+        try {
+          await fetch(SPACE_URL, { method: "GET", mode: "no-cors" });
+        } catch {}
+      }
 
-  return result.data[0];
+      const client = await Client.connect(SPACE_ID);
+
+      const result = await client.predict("/respond", {
+        message: userInput,
+        history: gradioHistory,  // pass conversation history
+      });
+
+      return result.data[0];
+
+    } catch (error) {
+      console.error(`Attempt ${attempt} failed:`, error);
+
+      if (attempt < retries) {
+        // Wait longer between each retry (10s, 20s, 30s)
+        const waitMs = attempt * 10000;
+        console.log(`Retrying in ${waitMs / 1000}s...`);
+        await new Promise(r => setTimeout(r, waitMs));
+      } else {
+        throw error;
+      }
+    }
+  }
+};
+
+// Convert our messages array to Gradio history format [[user, assistant], ...]
+const toGradioHistory = (messages) => {
+  const history = [];
+  let i = 0;
+  // Skip the first assistant greeting
+  const filtered = messages.filter((_, idx) => idx > 0);
+
+  while (i < filtered.length - 1) {
+    const curr = filtered[i];
+    const next = filtered[i + 1];
+    if (curr.role === "user" && next.role === "assistant") {
+      history.push([curr.content, next.content]);
+      i += 2;
+    } else {
+      i++;
+    }
+  }
+  return history;
 };
 
 export default function LawAssistChat() {
@@ -67,7 +113,6 @@ export default function LawAssistChat() {
     scrollToBottom();
   }, [messages, isTyping]);
 
-  // Listen to Firebase auth state changes
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
       if (firebaseUser) {
@@ -85,7 +130,6 @@ export default function LawAssistChat() {
         setShowAuth(true);
       }
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -101,7 +145,6 @@ export default function LawAssistChat() {
   const handleLogin = async () => {
     setAuthError('');
     setIsLoading(true);
-
     if (!email || !validateEmail(email)) {
       setAuthError('Please enter a valid email address');
       setIsLoading(false);
@@ -112,7 +155,6 @@ export default function LawAssistChat() {
       setIsLoading(false);
       return;
     }
-
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
@@ -135,7 +177,6 @@ export default function LawAssistChat() {
   const handleSignup = async () => {
     setAuthError('');
     setIsLoading(true);
-
     if (!name.trim()) {
       setAuthError('Please enter your name');
       setIsLoading(false);
@@ -156,13 +197,9 @@ export default function LawAssistChat() {
       setIsLoading(false);
       return;
     }
-
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      await saveUserData(userCredential.user.uid, {
-        name: name,
-        email: email,
-      });
+      await saveUserData(userCredential.user.uid, { name, email });
     } catch (error) {
       if (error.code === 'auth/email-already-in-use') {
         setAuthError('An account with this email already exists. Please login.');
@@ -180,13 +217,11 @@ export default function LawAssistChat() {
 
   const saveMessage = async (message) => {
     if (!user || !sessionId) return;
-
     setSaveStatus('Saving...');
-
     try {
       const result = await saveChatLog(user.uid, sessionId, user.name, message);
       setSaveStatus(result.success ? 'Saved ✓' : 'Save failed');
-    } catch (error) {
+    } catch {
       setSaveStatus('Save failed');
     }
     setTimeout(() => setSaveStatus(''), 2000);
@@ -195,7 +230,6 @@ export default function LawAssistChat() {
   const loadChatHistory = async (userId) => {
     try {
       const result = await getChatHistory(userId);
-
       if (result.success) {
         const sessions = {};
         result.logs.forEach(log => {
@@ -227,12 +261,14 @@ export default function LawAssistChat() {
     const userQuestion = input.trim();
     setInput("");
     setIsTyping(true);
-    setModelStatus("Connecting to Hugging Face...");
+    setModelStatus("Waking up Space...");
 
     try {
-      setModelStatus("Thinking...");
+      // Build Gradio history from current messages (before this new message)
+      const gradioHistory = toGradioHistory(messages);
 
-      const aiResponse = await getAIResponse(userQuestion);
+      setModelStatus("Thinking...");
+      const aiResponse = await getAIResponse(userQuestion, gradioHistory);
 
       const aiMessage = {
         role: "assistant",
@@ -248,12 +284,19 @@ export default function LawAssistChat() {
       console.error("Gradio API error:", error);
       setModelStatus("offline");
 
-      const errorMsg = {
+      // Friendly error message based on error type
+      let errorContent = "⚠️ The AI model is currently unavailable.\n\n";
+      if (error.message?.includes("timeout") || error.message?.includes("fetch")) {
+        errorContent += "The Hugging Face Space is sleeping and taking too long to wake up.\n\n💡 Try again in 60–90 seconds — it will be ready shortly.";
+      } else {
+        errorContent += `Error: ${error.message}\n\n💡 Make sure the Space "Deepti-singh-196/LawAssit_Version1_RAG" is running and set to public.`;
+      }
+
+      setMessages(prev => [...prev, {
         role: "assistant",
-        content: `⚠️ Unable to connect to the AI model.\n\nError: ${error.message}\n\nPlease check:\n1. Your Hugging Face Space "Deepti-singh-196/LawAssit_Version1_RAG" is running\n2. The Space is set to public\n3. The /respond endpoint is active`,
+        content: errorContent,
         timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, errorMsg]);
+      }]);
     } finally {
       setIsTyping(false);
     }
@@ -277,9 +320,7 @@ export default function LawAssistChat() {
   };
 
   const clearHistory = () => {
-    if (window.confirm('Clear visible history?')) {
-      setChatHistory([]);
-    }
+    if (window.confirm('Clear visible history?')) setChatHistory([]);
   };
 
   const handleLogout = async () => {
@@ -300,6 +341,7 @@ export default function LawAssistChat() {
     'How does copyright work in India?',
   ];
 
+  // ── Auth Screen ──────────────────────────────────────────────────────
   if (showAuth) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4">
@@ -327,13 +369,9 @@ export default function LawAssistChat() {
                 <label className="text-slate-300 text-sm mb-1 block">Full Name</label>
                 <div className="relative">
                   <User className="absolute left-3 top-3 w-5 h-5 text-slate-500" />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
+                  <input type="text" value={name} onChange={(e) => setName(e.target.value)}
                     placeholder="John Doe"
-                    className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none"
-                  />
+                    className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none" />
                 </div>
               </div>
             )}
@@ -341,31 +379,20 @@ export default function LawAssistChat() {
               <label className="text-slate-300 text-sm mb-1 block">Email Address</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-3 w-5 h-5 text-slate-500" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none"
-                />
+                  className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none" />
               </div>
             </div>
             <div>
               <label className="text-slate-300 text-sm mb-1 block">Password</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-3 w-5 h-5 text-slate-500" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-12 py-3 text-white placeholder-slate-500 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-3 text-slate-500 hover:text-slate-300"
-                >
+                <input type={showPassword ? 'text' : 'password'} value={password}
+                  onChange={(e) => setPassword(e.target.value)} placeholder="••••••••"
+                  className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-12 py-3 text-white placeholder-slate-500 focus:outline-none" />
+                <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-3 text-slate-500 hover:text-slate-300">
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
@@ -375,48 +402,26 @@ export default function LawAssistChat() {
                 <label className="text-slate-300 text-sm mb-1 block">Confirm Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-3 w-5 h-5 text-slate-500" />
-                  <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-12 py-3 text-white placeholder-slate-500 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-3 text-slate-500 hover:text-slate-300"
-                  >
+                  <input type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••"
+                    className="w-full bg-slate-900/50 border border-slate-700 focus:border-blue-500 rounded-xl pl-10 pr-12 py-3 text-white placeholder-slate-500 focus:outline-none" />
+                  <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-3 text-slate-500 hover:text-slate-300">
                     {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
               </div>
             )}
           </div>
-          <button
-            onClick={authMode === 'login' ? handleLogin : handleSignup}
-            disabled={isLoading}
-            className="w-full bg-gradient-to-br from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:from-slate-600 disabled:to-slate-600 text-white py-3 rounded-xl font-medium transition-all duration-200 mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 flex items-center justify-center gap-2"
-          >
+          <button onClick={authMode === 'login' ? handleLogin : handleSignup} disabled={isLoading}
+            className="w-full bg-gradient-to-br from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:from-slate-600 disabled:to-slate-600 text-white py-3 rounded-xl font-medium transition-all duration-200 mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 flex items-center justify-center gap-2">
             {isLoading ? (
-              <>
-                <Loader className="w-5 h-5 animate-spin" />
-                {authMode === 'login' ? 'Logging in...' : 'Signing up...'}
-              </>
+              <><Loader className="w-5 h-5 animate-spin" />{authMode === 'login' ? 'Logging in...' : 'Signing up...'}</>
             ) : authMode === 'login' ? 'Login' : 'Sign Up'}
           </button>
           <div className="text-center mt-6">
-            <button
-              onClick={() => {
-                setAuthMode(authMode === 'login' ? 'signup' : 'login');
-                setAuthError('');
-                setEmail('');
-                setPassword('');
-                setConfirmPassword('');
-                setName('');
-              }}
-              className="text-slate-400 hover:text-blue-400 text-sm transition-colors"
-            >
+            <button onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(''); setEmail(''); setPassword(''); setConfirmPassword(''); setName(''); }}
+              className="text-slate-400 hover:text-blue-400 text-sm transition-colors">
               {authMode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Login'}
             </button>
           </div>
@@ -425,6 +430,7 @@ export default function LawAssistChat() {
     );
   }
 
+  // ── Main Chat Screen ─────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
       <header className="bg-slate-900/50 backdrop-blur-lg border-b border-blue-500/20 px-6 py-4">
@@ -454,7 +460,7 @@ export default function LawAssistChat() {
             <button onClick={clearHistory} className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-red-400 hover:text-red-300" title="Clear History">
               <Trash2 className="w-5 h-5" />
             </button>
-            <button onClick={handleLogout} className="px-3 py-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-300 hover:text-white text-sm" title="Logout">
+            <button onClick={handleLogout} className="px-3 py-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-300 hover:text-white text-sm">
               Logout
             </button>
           </div>
@@ -464,8 +470,7 @@ export default function LawAssistChat() {
       {showHistory && (
         <div className="fixed right-4 top-20 w-80 bg-slate-800/95 backdrop-blur-lg border border-blue-500/30 rounded-2xl p-4 shadow-2xl shadow-blue-500/20 max-h-96 overflow-y-auto z-50">
           <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
-            <History className="w-5 h-5 text-blue-400" />
-            Recent Sessions
+            <History className="w-5 h-5 text-blue-400" /> Recent Sessions
           </h3>
           {chatHistory.length === 0 ? (
             <p className="text-slate-400 text-sm">No chat history yet</p>
@@ -497,11 +502,8 @@ export default function LawAssistChat() {
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl mx-auto pt-4">
                 {suggestedPrompts.map((prompt, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setInput(prompt)}
-                    className="p-4 bg-slate-800/50 hover:bg-slate-800 border border-blue-500/20 hover:border-blue-500/40 rounded-xl text-left text-slate-300 hover:text-white transition-all duration-200 group"
-                  >
+                  <button key={idx} onClick={() => setInput(prompt)}
+                    className="p-4 bg-slate-800/50 hover:bg-slate-800 border border-blue-500/20 hover:border-blue-500/40 rounded-xl text-left text-slate-300 hover:text-white transition-all duration-200 group">
                     <MessageSquare className="w-4 h-4 inline mr-2 text-blue-400 group-hover:scale-110 transition-transform" />
                     {prompt}
                   </button>
@@ -519,8 +521,7 @@ export default function LawAssistChat() {
               }`}>
                 {message.role === 'assistant' && (
                   <div className="flex items-center gap-2 mb-2 text-blue-400 text-sm font-medium">
-                    <Scale className="w-4 h-4" />
-                    LawAssist AI
+                    <Scale className="w-4 h-4" /> LawAssist AI
                   </div>
                 )}
                 <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
@@ -533,13 +534,15 @@ export default function LawAssistChat() {
             <div className="flex justify-start">
               <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl px-6 py-4">
                 <div className="flex items-center gap-2 text-blue-400 text-sm font-medium mb-2">
-                  <Scale className="w-4 h-4" />
-                  LawAssist AI
+                  <Scale className="w-4 h-4" /> LawAssist AI
                 </div>
-                <div className="flex gap-2">
-                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-2">
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                  </div>
+                  <span className="text-slate-400 text-xs">{modelStatus}</span>
                 </div>
               </div>
             </div>
@@ -562,25 +565,20 @@ export default function LawAssistChat() {
                 style={{ minHeight: '56px', maxHeight: '200px' }}
               />
             </div>
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isTyping}
-              className="bg-gradient-to-br from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:from-slate-700 disabled:to-slate-700 text-white p-4 rounded-2xl transition-all duration-200 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 disabled:shadow-none"
-            >
-              {isTyping
-                ? <Loader className="w-5 h-5 animate-spin" />
-                : <Send className="w-5 h-5" />}
+            <button onClick={handleSend} disabled={!input.trim() || isTyping}
+              className="bg-gradient-to-br from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:from-slate-700 disabled:to-slate-700 text-white p-4 rounded-2xl transition-all duration-200 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 disabled:shadow-none">
+              {isTyping ? <Loader className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
             </button>
           </div>
           <div className="flex items-center justify-between mt-3 text-xs text-slate-500">
             <p>
               Status: <span className={
                 modelStatus === 'ready' ? 'text-green-400' :
-                modelStatus.includes('Thinking') || modelStatus.includes('Connecting') ? 'text-yellow-400' :
+                modelStatus.includes('Thinking') || modelStatus.includes('Waking') || modelStatus.includes('Connecting') ? 'text-yellow-400' :
                 'text-red-400'
               }>{modelStatus}</span>
             </p>
-            <p className="text-slate-600">Press Enter to send, Shift+Enter for new line</p>
+            <p className="text-slate-600">Press Enter to send • Shift+Enter for new line</p>
           </div>
         </div>
       </div>
