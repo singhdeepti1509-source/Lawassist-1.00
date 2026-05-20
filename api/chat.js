@@ -1,30 +1,27 @@
+import { Client } from "@gradio/client";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { message } = req.body;
+  const { message, history = [] } = req.body;
 
   try {
-    const response = await fetch(
-      "https://deepti-singh-196-lawassit-version1-rag.hf.space/run/predict",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.HF_TOKEN}`,
-        },
-        body: JSON.stringify({
-          data: [message],
-          fn_index: 0,
-        }),
-      }
+    const client = await Client.connect(
+      "Deepti-singh-196/LawAssit_Version1_RAG",
+      { hf_token: process.env.HF_TOKEN }
     );
 
-    const result = await response.json();
+    const result = await client.predict("/respond", {
+      message,
+      history,
+    });
+
     return res.status(200).json({ reply: result.data[0] });
 
   } catch (error) {
-    return res.status(500).json({ error: "Failed to reach model" });
+    console.error("HF error:", error);
+    return res.status(500).json({ error: error.message || "Model error" });
   }
 }
