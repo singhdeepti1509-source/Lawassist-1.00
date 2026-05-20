@@ -5,7 +5,6 @@ import {
   EyeOff, AlertCircle, Loader,
 } from 'lucide-react';
 
-
 import {
   auth,
   createUserWithEmailAndPassword,
@@ -36,17 +35,6 @@ const getAIResponse = async (userInput, gradioHistory = [], onStatus) => {
   const data = await res.json();
   if (onStatus) onStatus("Done!");
   return data.reply;
-};
-    // 3 minute timeout
-    setTimeout(() => {
-      clearInterval(checkDone);
-      if (finalResult !== null) {
-        resolve(finalResult);
-      } else {
-        reject(new Error("timeout"));
-      }
-    }, 180000);
-  });
 };
 
 // Convert messages to Gradio [[user, assistant], ...] format
@@ -209,7 +197,7 @@ export default function LawAssistChat() {
       const aiResponse = await getAIResponse(
         userQuestion,
         gradioHistory,
-        (status) => setModelStatus(status)  // live status updates
+        (status) => setModelStatus(status)
       );
 
       const aiMessage = {
