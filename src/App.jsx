@@ -4,7 +4,7 @@ import {
   History, Trash2, User, Mail, Lock, Eye,
   EyeOff, AlertCircle, Loader,
 } from 'lucide-react';
-import { Client } from "@gradio/client";
+
 
 import {
   auth,
@@ -17,52 +17,26 @@ import {
   getChatHistory,
 } from './firebase';
 
-const SPACE_ID = "Deepti-singh-196/LawAssit_Version1_RAG";
-const SPACE_URL = "https://deepti-singh-196-lawassit-version1-rag.hf.space";
-
-// Uses submit() instead of predict() — no timeout, works for slow models
 const getAIResponse = async (userInput, gradioHistory = [], onStatus) => {
-  // Ping to wake Space first
-  try {
-    await fetch(SPACE_URL, { method: "GET", mode: "no-cors" });
-  } catch {}
+  if (onStatus) onStatus("Connecting...");
 
-  const client = await Client.connect(SPACE_ID);
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: userInput, history: gradioHistory }),
+  });
 
-  return new Promise((resolve, reject) => {
-    let finalResult = null;
+  if (onStatus) onStatus("Generating answer...");
 
-    const job = client.submit("/respond", {
-      message: userInput,
-      history: gradioHistory,
-    });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Server error");
+  }
 
-    job.on("output", (output) => {
-      finalResult = output.data[0];
-    });
-
-    job.on("status", (status) => {
-      console.log("Gradio status:", status.stage);
-      if (onStatus) {
-        if (status.stage === "pending") onStatus("Waiting in queue...");
-        else if (status.stage === "generating") onStatus("Generating answer...");
-        else if (status.stage === "complete") onStatus("Done!");
-        else onStatus(`Processing (${status.stage})...`);
-      }
-    });
-
-    job.on("error", (error) => {
-      reject(new Error(error?.message || "Gradio error"));
-    });
-
-    // Poll for result
-    const checkDone = setInterval(() => {
-      if (finalResult !== null) {
-        clearInterval(checkDone);
-        resolve(finalResult);
-      }
-    }, 1000);
-
+  const data = await res.json();
+  if (onStatus) onStatus("Done!");
+  return data.reply;
+};
     // 3 minute timeout
     setTimeout(() => {
       clearInterval(checkDone);
