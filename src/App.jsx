@@ -28,11 +28,20 @@ const getAIResponse = async (userInput, gradioHistory = [], onStatus) => {
   if (onStatus) onStatus("Generating answer...");
 
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Server error");
+    // Safely handle both JSON and plain-text error responses
+    const text = await res.text();
+    let message = text;
+    try { message = JSON.parse(text)?.error || text; } catch {}
+    throw new Error(message || "Server error");
   }
 
-  const data = await res.json();
+  // Safely handle non-JSON success responses too
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    throw new Error("Invalid response from server: " + text.slice(0, 100));
+  }
+
   if (onStatus) onStatus("Done!");
   return data.reply;
 };
