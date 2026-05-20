@@ -28,14 +28,12 @@ const getAIResponse = async (userInput, gradioHistory = [], onStatus) => {
   if (onStatus) onStatus("Generating answer...");
 
   if (!res.ok) {
-    // Safely handle both JSON and plain-text error responses
     const text = await res.text();
     let message = text;
     try { message = JSON.parse(text)?.error || text; } catch {}
     throw new Error(message || "Server error");
   }
 
-  // Safely handle non-JSON success responses too
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch {
@@ -46,22 +44,13 @@ const getAIResponse = async (userInput, gradioHistory = [], onStatus) => {
   return data.reply;
 };
 
-// Convert messages to Gradio [[user, assistant], ...] format
+// ✅ FIXED: Convert messages to {role, content}[] format
+// api/chat.js handles the conversion to Gradio [[user, assistant]] format
 const toGradioHistory = (messages) => {
-  const history = [];
-  const filtered = messages.filter((_, idx) => idx > 0);
-  let i = 0;
-  while (i < filtered.length - 1) {
-    const curr = filtered[i];
-    const next = filtered[i + 1];
-    if (curr.role === "user" && next.role === "assistant") {
-      history.push([curr.content, next.content]);
-      i += 2;
-    } else {
-      i++;
-    }
-  }
-  return history;
+  return messages
+    .slice(1) // remove the initial greeting message
+    .filter(m => m.role === "user" || m.role === "assistant")
+    .map(m => ({ role: m.role, content: m.content }));
 };
 
 export default function LawAssistChat() {
@@ -198,7 +187,9 @@ export default function LawAssistChat() {
     const userQuestion = input.trim();
     setInput("");
     setIsTyping(true);
-    setModelStatus("Connecting to Space...");
+
+    // ✅ FIXED: Clearer status message for users during cold start
+    setModelStatus("Waking up model... (first request may take 30s)");
 
     try {
       const gradioHistory = toGradioHistory(messages);
