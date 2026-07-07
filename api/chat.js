@@ -1,38 +1,52 @@
 // api/chat.js  ← put this in your project's /api folder
 //
-// Uses the official @gradio/client package instead of hand-rolling Gradio's
-// internal /queue/join + /queue/data SSE protocol. That protocol isn't a
-// stable public API — its endpoint paths and message shapes have changed
-// between Gradio major versions (e.g. /queue/join vs /gradio_api/queue/join),
-// so hand-rolled fetch calls are fragile and hard to keep working.
+// Uses the official @gradio/client package to call the deployed HF Space.
 //
-// Run `npm install @gradio/client` and add it to package.json before deploying.
+// IMPORTANT: the Space's exposed API endpoint is "/respond" and it accepts
+// ONLY a `message` string — no `history` parameter. Gradio's ChatInterface
+// keeps conversation history as an internal State component, which isn't
+// exposed through the public API by default. That means the model itself
+// only ever sees the latest message, not prior turns.
 //
-// NOTE: switched from `runtime: "edge"` to Node.js. @gradio/client relies on
-// APIs (WebSocket/EventSource internals) that aren't guaranteed to work in
-// the Edge runtime. If you're on Vercel Hobby, serverless functions have a
-// hard execution cap (historically 10s, up to 60s on some plans) — a
-// ZeroGPU cold start (30-60s+) can still exceed that. If you hit timeouts,
-// either upgrade your Vercel plan for a higher `maxDuration`, or move to a
-// pattern where the frontend polls a status endpoint instead of waiting on
-// one long request.
+// If you want the model to have conversational context, you have to build
+// that context into the `message` string yourself before sending it (see
+// buildPromptWithHistory below) — there's no other way to pass it through
+// this API as currently exposed.
 
 import { Client } from "@gradio/client";
 
 export const config = {
-  maxDuration: 60, // requires a Vercel plan that allows this; see note above
+  maxDuration: 60, // requires a Vercel plan that allows this
 };
 
-const SPACE_URL = "https://deepti-singh-196-lawassit-version1-rag.hf.space";
+const SPACE_URL = "Deepti-singh-196/LawAssit_Version1_RAG"; // HF Space repo id
 
-// Reuse the connected client across warm invocations instead of reconnecting
-// on every request.
 let clientPromise = null;
 function getClient() {
   if (!clientPromise) {
     clientPromise = Client.connect(SPACE_URL);
   }
   return clientPromise;
+}
+
+// Folds prior turns into a single prompt string, since the API endpoint
+// doesn't accept history directly. Keeps only the last few turns to avoid
+// blowing past the model's context window.
+function buildPromptWithHistory(message, history, maxTurns = 4) {
+  if (!history?.length) return message;
+
+  const recent = history.slice(-maxTurns * 2); // history is {role, content}[]
+  const turns = [];
+  for (let i = 0; i < recent.length - 1; i += 2) {
+    const user = recent[i];
+    const assistant = recent[i + 1];
+    if (user?.role === "user" && assistant?.role === "assistant") {
+      turns.push(`User: ${user.content}\nAssistant: ${assistant.content}`);
+    }
+  }
+  if (!turns.length) return message;
+
+  return `${turns.join("\n\n")}\n\nUser: ${message}`;
 }
 
 export default async function handler(req, res) {
@@ -47,28 +61,19 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Convert {role, content}[] -> [[user, assistant], ...] for Gradio's
-  // ChatInterface history format.
-  const gradioHistory = [];
-  for (let i = 0; i < history.length - 1; i += 2) {
-    const user = history[i];
-    const assistant = history[i + 1];
-    if (user?.role === "user" && assistant?.role === "assistant") {
-      gradioHistory.push([user.content, assistant.content]);
-    }
-  }
+  const fullMessage = buildPromptWithHistory(message, history);
 
   try {
     const client = await getClient();
 
-    // ChatInterface exposes its predict function at the "/chat" api_name by
-    // default. The fn signature is respond(message, history), so pass
-    // positional args in that order.
-    const result = await client.predict("/chat", [message, gradioHistory]);
+    const result = await client.predict("/respond", {
+      message: fullMessage,
+    });
 
-    // result.data is an array matching the outputs of the Gradio fn.
-    // ChatInterface's respond() returns a single string, so data[0] is it.
-    const reply = Array.isArray(result?.data) ? result.data[0] : result?.data;
+    // The Python client returns the raw value directly; the JS client
+    // wraps it in { data: [...] }. Handle both shapes defensively.
+    let reply = Array.isArray(result?.data) ? result.data[0] : result?.data;
+    if (reply === undefined) reply = result;
 
     if (!reply) {
       throw new Error("Empty response from model. Space may still be loading.");
