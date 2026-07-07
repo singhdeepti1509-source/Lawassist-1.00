@@ -1,37 +1,54 @@
-// api/chat.js  ← put this in your project root /api folder
+// api/chat.js  ← put this in your project's /api folder
+//
+// Uses the official @gradio/client package instead of hand-rolling Gradio's
+// internal /queue/join + /queue/data SSE protocol. That protocol isn't a
+// stable public API — its endpoint paths and message shapes have changed
+// between Gradio major versions (e.g. /queue/join vs /gradio_api/queue/join),
+// so hand-rolled fetch calls are fragile and hard to keep working.
+//
+// Run `npm install @gradio/client` and add it to package.json before deploying.
+//
+// NOTE: switched from `runtime: "edge"` to Node.js. @gradio/client relies on
+// APIs (WebSocket/EventSource internals) that aren't guaranteed to work in
+// the Edge runtime. If you're on Vercel Hobby, serverless functions have a
+// hard execution cap (historically 10s, up to 60s on some plans) — a
+// ZeroGPU cold start (30-60s+) can still exceed that. If you hit timeouts,
+// either upgrade your Vercel plan for a higher `maxDuration`, or move to a
+// pattern where the frontend polls a status endpoint instead of waiting on
+// one long request.
 
-export const config = { runtime: "edge" }; // ✅ No timeout on Edge!
+import { Client } from "@gradio/client";
+
+export const config = {
+  maxDuration: 60, // requires a Vercel plan that allows this; see note above
+};
 
 const SPACE_URL = "https://deepti-singh-196-lawassit-version1-rag.hf.space";
 
-export default async function handler(req) {
+// Reuse the connected client across warm invocations instead of reconnecting
+// on every request.
+let clientPromise = null;
+function getClient() {
+  if (!clientPromise) {
+    clientPromise = Client.connect(SPACE_URL);
+  }
+  return clientPromise;
+}
+
+export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
-    });
+    res.status(405).json({ error: "Method not allowed" });
+    return;
   }
 
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  const { message, history = [] } = body;
-
+  const { message, history = [] } = req.body || {};
   if (!message) {
-    return new Response(JSON.stringify({ error: "No message provided" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
+    res.status(400).json({ error: "No message provided" });
+    return;
   }
 
-  // ✅ Convert {role, content}[] → [[user, assistant], ...] for Gradio
+  // Convert {role, content}[] -> [[user, assistant], ...] for Gradio's
+  // ChatInterface history format.
   const gradioHistory = [];
   for (let i = 0; i < history.length - 1; i += 2) {
     const user = history[i];
@@ -42,82 +59,24 @@ export default async function handler(req) {
   }
 
   try {
-    // ── Step 1: Join the Gradio queue ─────────────────────────────────
-    const joinRes = await fetch(`${SPACE_URL}/queue/join`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        data: [message, gradioHistory],
-        fn_index: 0,        // ← ChatInterface is always fn_index 0
-        session_hash: Math.random().toString(36).slice(2),
-      }),
-    });
+    const client = await getClient();
 
-    if (!joinRes.ok) {
-      const err = await joinRes.text();
-      throw new Error(`Queue join failed: ${err}`);
-    }
+    // ChatInterface exposes its predict function at the "/chat" api_name by
+    // default. The fn signature is respond(message, history), so pass
+    // positional args in that order.
+    const result = await client.predict("/chat", [message, gradioHistory]);
 
-    const { event_id } = await joinRes.json();
-
-    // ── Step 2: Poll the data stream for the result ───────────────────
-    const dataRes = await fetch(
-      `${SPACE_URL}/queue/data?session_hash=${event_id}`,
-      { headers: { Accept: "text/event-stream" } }
-    );
-
-    if (!dataRes.ok) {
-      throw new Error(`Stream failed: ${dataRes.status}`);
-    }
-
-    // ── Step 3: Read SSE stream until we get the final output ─────────
-    const reader = dataRes.body.getReader();
-    const decoder = new TextDecoder();
-    let reply = null;
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop(); // keep incomplete line
-
-      for (const line of lines) {
-        if (!line.startsWith("data:")) continue;
-        try {
-          const json = JSON.parse(line.slice(5).trim());
-
-          if (json.msg === "process_completed") {
-            // ✅ Gradio returns data[0] as the assistant reply
-            reply = json.output?.data?.[0] ?? null;
-            break;
-          }
-          if (json.msg === "queue_full") {
-            throw new Error("Space queue is full. Please try again.");
-          }
-        } catch (parseErr) {
-          // skip malformed SSE lines
-        }
-      }
-      if (reply !== null) break;
-    }
+    // result.data is an array matching the outputs of the Gradio fn.
+    // ChatInterface's respond() returns a single string, so data[0] is it.
+    const reply = Array.isArray(result?.data) ? result.data[0] : result?.data;
 
     if (!reply) {
-      throw new Error("No response from model. Space may be loading.");
+      throw new Error("Empty response from model. Space may still be loading.");
     }
 
-    return new Response(JSON.stringify({ reply }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-
+    res.status(200).json({ reply });
   } catch (err) {
-    console.error("HF Space error:", err.message);
-    return new Response(
-      JSON.stringify({ error: err.message || "Space unreachable" }),
-      { status: 503, headers: { "Content-Type": "application/json" } }
-    );
+    console.error("HF Space error:", err);
+    res.status(503).json({ error: err?.message || "Space unreachable" });
   }
 }
